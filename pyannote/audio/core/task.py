@@ -27,7 +27,6 @@ import itertools
 import multiprocessing
 import numpy as np
 from pathlib import Path
-import pickle
 import sys
 import warnings
 from dataclasses import dataclass
@@ -602,14 +601,14 @@ class Task(pl.LightningDataModule):
 
         dtype = [("file_id", "i"), ("start", "f"), ("duration", "f")]
         prepared_data["validation_chunks"] = np.array(validation_chunks, dtype=dtype)
-        
+
         self.prepared_data = prepared_data
         self.has_setup_metadata = True
 
         # save preparated data on the disk
         if self.cache_path is not None:
             with open(self.cache_path, 'wb') as cache_file:
-                pickle.dump(prepared_data, cache_file)
+                np.savez_compressed(cache_file, **prepared_data)
 
         self.has_prepared_data = True
 
@@ -627,7 +626,7 @@ class Task(pl.LightningDataModule):
             # load data cached by prepare_data method into the task:
             try:
                 with open(self.cache_path, 'rb') as cache_file:
-                    self.prepared_data = pickle.load(cache_file)
+                    self.prepared_data = dict(np.load(cache_file, allow_pickle=True))
             except FileNotFoundError:
                 print("""Cached data for protocol not found. Ensure that prepare_data was
                       executed correctly and that the path to the task cache is correct""")
