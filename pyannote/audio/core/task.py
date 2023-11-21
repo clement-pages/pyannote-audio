@@ -285,9 +285,7 @@ class Task(pl.LightningDataModule):
                 # data was already created, do nothing
                 return
             # create a new cache directory at the path specified by the user
-            else:
-                cache_rep = Path(self.cache_path[: self.cache_path.rfind('/')])
-                cache_rep.mkdir(parents=True, exist_ok=True)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
         # duration of training chunks
         # TODO: handle variable duration case
         duration = getattr(self, "duration", 0.0)
@@ -617,10 +615,13 @@ class Task(pl.LightningDataModule):
         if not self.has_setup_metadata:
             # if no cache directory was provided by the user and task data was not already prepared
             if self.cache_path is None and not self.has_prepared_data:
-                warnings.warn("""No path to the directory containing the cache of prepared data
-                              has been specified. Data preparation will therefore be carried out
-                              on each process used for training. To speed up data preparation, you
-                              can specify a cache directory when instantiating the task.""", stacklevel=1)
+                warnings.warn(
+                            "No path to the directory containing the cache of prepared data"
+                            "has been specified. Data preparation will therefore be carried out"
+                            "on each process used for training. To speed up data preparation, you"
+                            "can specify a cache directory when instantiating the task.",
+                            stacklevel=1
+                        )
                 self.prepare_data()
                 return
             # load data cached by prepare_data method into the task:
@@ -628,8 +629,10 @@ class Task(pl.LightningDataModule):
                 with open(self.cache_path, 'rb') as cache_file:
                     self.prepared_data = dict(np.load(cache_file, allow_pickle=True))
             except FileNotFoundError:
-                print("""Cached data for protocol not found. Ensure that prepare_data was
-                      executed correctly and that the path to the task cache is correct""")
+                print(
+                    "Cached data for protocol not found. Ensure that prepare_data was"
+                    "executed correctly and that the path to the task cache is correct"
+                )
                 raise
             self.has_setup_metadata = True
 
@@ -648,6 +651,8 @@ class Task(pl.LightningDataModule):
 
     @property
     def has_prepared_data(self):
+        # This flag indicates if data for this task was generated, and
+        # optionally saved on the disk
         return getattr(self, "_has_prepared_data", False)
 
     @has_prepared_data.setter
@@ -656,6 +661,8 @@ class Task(pl.LightningDataModule):
 
     @property
     def has_setup_metadata(self):
+        # This flag indicates if data was assigned to this task, directly from prepared
+        # data or by reading in a cached file on the disk
         return getattr(self, "_has_setup_metadata", False)
 
     @has_setup_metadata.setter
