@@ -522,7 +522,7 @@ class Task(pl.LightningDataModule):
             tuple(metadatum.get(key, -1) for key in metadata_unique_values)
             for metadatum in metadata
         ]
-        dtype = [(key, "i") for key in metadata_unique_values]
+        dtype = [(key, "b") for key in metadata_unique_values]
 
         prepared_data["metadata"] = np.array(metadata, dtype=dtype)
         prepared_data["audios"] = np.array(audios, dtype=np.string_)
@@ -530,10 +530,10 @@ class Task(pl.LightningDataModule):
         # turn list of files metadata into a single numpy array
         # TODO: improve using https://github.com/pytorch/pytorch/issues/13246#issuecomment-617140519
         dtype = [
-            ("sample_rate", "i"),
+            ("sample_rate", "u2"),
             ("num_frames", "i"),
-            ("num_channels", "i"),
-            ("bits_per_sample", "i"),
+            ("num_channels", "B"),
+            ("bits_per_sample", "B"),
         ]
         prepared_data["audio_infos"] = np.array(audio_infos, dtype=dtype)
         prepared_data["audio_encodings"] = np.array(audio_encodings, dtype=np.string_)
