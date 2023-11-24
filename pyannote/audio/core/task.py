@@ -449,7 +449,6 @@ class Task(pl.LightningDataModule):
                     file_id,
                     segment.duration,
                     segment.start,
-                    segment.end,
                 )
                 annotated_regions.append(annotated_region)
 
@@ -530,7 +529,7 @@ class Task(pl.LightningDataModule):
         # turn list of files metadata into a single numpy array
         # TODO: improve using https://github.com/pytorch/pytorch/issues/13246#issuecomment-617140519
         dtype = [
-            ("sample_rate", "u2"),
+            ("sample_rate", "i"),
             ("num_frames", "i"),
             ("num_channels", "B"),
             ("bits_per_sample", "B"),
@@ -540,9 +539,8 @@ class Task(pl.LightningDataModule):
         prepared_data["annotated_duration"] = np.array(annotated_duration)
 
         # turn list of annotated regions into a single numpy array
-        dtype = [("file_id", "i"), ("duration", "f"), ("start", "f"), ("end", "f")]
-        annotated_regions_array = np.array(annotated_regions, dtype=dtype)
-        prepared_data["annotated_regions"] = annotated_regions_array
+        dtype = [("file_id", "i"), ("duration", "f"), ("start", "f")]
+        prepared_data["annotated_regions"] = np.array(annotated_regions, dtype=dtype)
 
         # convert annotated_classes (which is a list of list of classes, one list of classes per file)
         # into a single (num_files x num_classes) numpy array:
@@ -583,8 +581,8 @@ class Task(pl.LightningDataModule):
         # iterate over files in the validation subset
         for file_id in validation_file_ids:
             # get annotated regions in file
-            annotated_regions = annotated_regions_array[
-                annotated_regions_array["file_id"] == file_id
+            annotated_regions = prepared_data["annotated_regions"][
+                prepared_data["annotated_regions"]["file_id"] == file_id
             ]
 
             # iterate over annotated regions
