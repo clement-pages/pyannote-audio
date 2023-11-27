@@ -568,35 +568,33 @@ class Task(pl.LightningDataModule):
         prepared_data["annotations"] = np.array(annotations, dtype=dtype)
         prepared_data["metadata_unique_values"] = metadata_unique_values
 
-        if not self.has_validation:
-            return
+        if self.has_validation:
+            validation_chunks = list()
 
-        validation_chunks = list()
+            # obtain indexes of files in the validation subset
+            validation_file_ids = np.where(
+                prepared_data["metadata"]["subset"] == Subsets.index("development")
+            )[0]
 
-        # obtain indexes of files in the validation subset
-        validation_file_ids = np.where(
-            prepared_data["metadata"]["subset"] == Subsets.index("development")
-        )[0]
+            # iterate over files in the validation subset
+            for file_id in validation_file_ids:
+                # get annotated regions in file
+                annotated_regions = prepared_data["annotated_regions"][
+                    prepared_data["annotated_regions"]["file_id"] == file_id
+                ]
 
-        # iterate over files in the validation subset
-        for file_id in validation_file_ids:
-            # get annotated regions in file
-            annotated_regions = prepared_data["annotated_regions"][
-                prepared_data["annotated_regions"]["file_id"] == file_id
-            ]
+                # iterate over annotated regions
+                for annotated_region in annotated_regions:
+                    # number of chunks in annotated region
+                    num_chunks = round(annotated_region["duration"] // duration)
 
-            # iterate over annotated regions
-            for annotated_region in annotated_regions:
-                # number of chunks in annotated region
-                num_chunks = round(annotated_region["duration"] // duration)
+                    # iterate over chunks
+                    for c in range(num_chunks):
+                        start_time = annotated_region["start"] + c * duration
+                        validation_chunks.append((file_id, start_time, duration))
 
-                # iterate over chunks
-                for c in range(num_chunks):
-                    start_time = annotated_region["start"] + c * duration
-                    validation_chunks.append((file_id, start_time, duration))
-
-        dtype = [("file_id", "i"), ("start", "f"), ("duration", "f")]
-        prepared_data["validation_chunks"] = np.array(validation_chunks, dtype=dtype)
+            dtype = [("file_id", "i"), ("start", "f"), ("duration", "f")]
+            prepared_data["validation_chunks"] = np.array(validation_chunks, dtype=dtype)
 
         self.prepared_data = prepared_data
         self.has_setup_metadata = True
