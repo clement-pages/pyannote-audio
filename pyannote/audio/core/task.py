@@ -282,7 +282,7 @@ class Task(pl.LightningDataModule):
         if self.cache_path is not None:
             cache_path = Path(self.cache_path)
             if cache_path.exists():
-                # data was already created, do nothing
+                # data was already created, nothing to do
                 return
             # create a new cache directory at the path specified by the user
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -524,7 +524,9 @@ class Task(pl.LightningDataModule):
         dtype = [(key, "b") for key in metadata_unique_values]
 
         prepared_data["metadata"] = np.array(metadata, dtype=dtype)
+        metadata.clear()
         prepared_data["audios"] = np.array(audios, dtype=np.string_)
+        audios.clear()
 
         # turn list of files metadata into a single numpy array
         # TODO: improve using https://github.com/pytorch/pytorch/issues/13246#issuecomment-617140519
@@ -535,12 +537,16 @@ class Task(pl.LightningDataModule):
             ("bits_per_sample", "B"),
         ]
         prepared_data["audio_infos"] = np.array(audio_infos, dtype=dtype)
+        audio_infos.clear()
         prepared_data["audio_encodings"] = np.array(audio_encodings, dtype=np.string_)
+        audio_encodings.clear()
         prepared_data["annotated_duration"] = np.array(annotated_duration)
+        annotated_duration.clear()
 
         # turn list of annotated regions into a single numpy array
         dtype = [("file_id", "i"), ("duration", "f"), ("start", "f")]
         prepared_data["annotated_regions"] = np.array(annotated_regions, dtype=dtype)
+        annotated_regions.clear()
 
         # convert annotated_classes (which is a list of list of classes, one list of classes per file)
         # into a single (num_files x num_classes) numpy array:
@@ -554,6 +560,8 @@ class Task(pl.LightningDataModule):
         for file_id, classes in enumerate(annotated_classes):
             annotated_classes_array[file_id, classes] = True
         prepared_data["annotated_classes"] = annotated_classes_array
+        annotated_classes.clear()
+        del annotated_classes_array
 
         # turn list of annotations into a single numpy array
         dtype = [
@@ -566,7 +574,9 @@ class Task(pl.LightningDataModule):
         ]
 
         prepared_data["annotations"] = np.array(annotations, dtype=dtype)
+        annotations.clear()
         prepared_data["metadata_unique_values"] = metadata_unique_values
+        metadata_unique_values.clear()
 
         if self.has_validation:
             validation_chunks = list()
@@ -595,6 +605,7 @@ class Task(pl.LightningDataModule):
 
             dtype = [("file_id", "i"), ("start", "f"), ("duration", "f")]
             prepared_data["validation_chunks"] = np.array(validation_chunks, dtype=dtype)
+            validation_chunks.clear()
 
         self.prepared_data = prepared_data
         self.has_setup_metadata = True
