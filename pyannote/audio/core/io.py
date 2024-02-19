@@ -434,5 +434,6 @@ class Audio:
         # pad with zeros
         if mode == "pad":
             data = F.pad(data, (pad_start, pad_end))
-
-        return self.downmix_and_resample(data, sample_rate)
+            return self.downmix_and_resample(data, sample_rate), pad_start, pad_end
+        else:
+            return self.downmix_and_resample(data, sample_rate)

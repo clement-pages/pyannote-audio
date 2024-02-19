@@ -20,8 +20,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from .EmoModel import EmotionModel
+from .EmoModel import EmotionModel, EmotionModelWavLM, EmotionModelWavLMV2
 from .PyanNet import PyanNet
 from .SSeRiouSS import SSeRiouSS
 
-__all__ = ["PyanNet", "SSeRiouSS", "EmotionModel"]
+__all__ = [
+    "PyanNet",
+    "SSeRiouSS",
+    "EmotionModel",
+    "EmotionModelWavLM",
+    "EmotionModelWavLMV2",
+]
