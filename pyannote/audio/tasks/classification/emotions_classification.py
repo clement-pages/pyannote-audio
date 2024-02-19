@@ -27,7 +27,7 @@ from pyannote.audio.utils.random import create_rng_for_worker
 
 
 # Your custom task must be a subclass of `pyannote.audio.core.task.Task`
-class MultiClassSegmentation(Task):
+class EmotionsClassifcation(Task):
     """Sound event detection"""
 
     def __init__(
