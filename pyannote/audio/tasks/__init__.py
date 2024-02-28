@@ -28,6 +28,7 @@ from .segmentation.overlapped_speech_detection import (  # isort:skip
 )
 from .embedding.arcface import SupervisedRepresentationLearningWithArcFace  # isort:skip
 from .classification.emotions_classification import EmotionsClassifcation
+from .regression.emotional_attributes_prediction import EmotionalAttributesPrediction
 
 # Segmentation has been renamed to SpeakerDiarization but we keep Segmentation here for backward compatibility
 Segmentation = SpeakerDiarization
@@ -43,4 +44,5 @@ __all__ = [
     "SpeakerEmbedding",
     "Segmentation",
     "EmotionsClassifcation",
+    "EmotionalAttributesPrediction",
 ]
