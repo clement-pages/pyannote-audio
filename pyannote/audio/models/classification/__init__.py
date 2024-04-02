@@ -21,6 +21,6 @@
 # SOFTWARE.
 
 
-from .emotions import EmotionModel, EmotionModelWavLM, EmotionModelWavLMV2
+from .emotions import EmotionModelWavLM
 
-__all__ = ["EmotionModel", "EmotionModelWavLM", "EmotionModelWavLMV2"]
+__all__ = ["EmotionModelWavLM"]

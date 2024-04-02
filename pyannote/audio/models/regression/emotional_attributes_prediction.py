@@ -62,6 +62,12 @@ class EmotionRegModelWavLM(Model):
         Keyword arugments used to initialize linear layers
         Defaults to {"hidden_size": 128, "num_layers": 2},
         i.e. two linear layers with 128 units each.
+    pooling_mode: str, optional
+        Pooling method: mean pooling, max pooling or both (sum of mean and max pooling).
+        Default to mean
+    pool_before_classifier: boolean, optional
+        Whether to pool before classifcation
+        Default to False. Warning: when set to True, zero-padding removal is not applied (TODO)
     """
 
     WAV2VEC_DEFAULTS = "WAVLM_BASE"
@@ -164,9 +170,12 @@ class EmotionRegModelWavLM(Model):
             self.lstm = nn.ModuleList(
                 [
                     nn.LSTM(
-                        wav2vec_dim
-                        if i == 0
-                        else lstm["hidden_size"] * (2 if lstm["bidirectional"] else 1),
+                        (
+                            wav2vec_dim
+                            if i == 0
+                            else lstm["hidden_size"]
+                            * (2 if lstm["bidirectional"] else 1)
+                        ),
                         **one_layer_lstm,
                     )
                     for i in range(num_layers)
