@@ -20,31 +20,29 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from collections import defaultdict
 import copy
 import itertools
 import math
-from pathlib import Path
 import random
 import warnings
+from collections import defaultdict
+from pathlib import Path
 from tempfile import mkstemp
 from typing import Dict, Literal, Optional, Sequence, Union
 
 import numpy as np
 import torch
-from torch import nn
 from einops import rearrange
 from matplotlib import pyplot as plt
 from pyannote.core import Segment, SlidingWindowFeature
 from pyannote.database.protocol.protocol import Scope, Subset
 from pytorch_lightning.loggers import MLFlowLogger, TensorBoardLogger
 from pytorch_metric_learning.losses import ArcFaceLoss
+from torch import nn
 from torch_audiomentations.core.transforms_interface import BaseWaveformTransform
 from torchmetrics import Metric
 
-from pyannote.audio.core.task import (
-    Problem, Resolution, Specifications, get_dtype
-)
+from pyannote.audio.core.task import Problem, Resolution, Specifications, get_dtype
 from pyannote.audio.tasks import SpeakerDiarization
 from pyannote.audio.torchmetrics import (
     DiarizationErrorRate,
@@ -123,7 +121,6 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         # * embedding databases are those with global speaker label scope
         # * diarization databases are those with file or database speaker label scope
         self.global_files_id = []
-        self.database_dataset_idxs = []
 
     def prepare_data(self):
         """Use this to prepare data from task protocol
@@ -263,7 +260,7 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
             for segment in file["annotated"]:
                 # skip annotated regions that are shorter than training chunk duration
                 # if segment.duration < self.duration:
-                    # continue
+                # continue
 
                 # append annotated region
                 annotated_region = (
@@ -435,9 +432,9 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
 
         super().setup()
 
-        self.prepared_data["metadata-values"] = (
-            self.prepared_data["metadata-values"].tolist()
-        )
+        self.prepared_data["metadata-values"] = self.prepared_data[
+            "metadata-values"
+        ].tolist()
 
         global_scope_mask = (
             self.prepared_data["annotations-segments"]["global_label_idx"] > -1
@@ -446,17 +443,16 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
             self.prepared_data["annotations-segments"]["file_id"][global_scope_mask]
         )
 
-        mask = (
-            self.prepared_data["audio-metadata"][:]["scope"] > 0
-        )
-        database_indexes = (
-            np.unique(self.prepared_data["audio-metadata"][mask]["database"])
+        mask = self.prepared_data["audio-metadata"][:]["scope"] > 0
+        database_indexes = np.unique(
+            self.prepared_data["audio-metadata"][mask]["database"]
         )
         classes = {}
         for database_index in database_indexes:
             database = self.prepared_data["metadata-values"]["database"][database_index]
-            classes[database] = [i for i in range(len(self.prepared_data[f"metadata-{database}-labels"]))]
-
+            classes[database] = np.arange(
+                len(self.prepared_data[f"metadata-{database}-labels"])
+            )
         # if there is no file dedicated to the embedding task
         if self.alpha != 1.0 and len(classes) == 0:
             self.num_dia_samples = self.batch_size
@@ -490,7 +486,9 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         )
         self.specifications = (speaker_diarization, speaker_embedding)
 
-    def prepare_chunk(self, file_id: int, start_time: float, duration: float):
+    def prepare_chunk(
+        self, file_id: int, start_time: float, duration: float, database: str = None
+    ):
         """Prepare chunk
 
         Parameters
@@ -519,7 +517,12 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
 
         # get label scope
         label_scope = Scopes[self.prepared_data["audio-metadata"][file_id]["scope"]]
-        label_scope_key = f"{label_scope}_label_idx"
+
+        # there is a bug with arface if we take global_label_idx
+        if label_scope in ["database", "global"]:
+            label_scope_key = "database_label_idx"
+        else:
+            label_scope_key = "file_label_idx"
 
         chunk = Segment(start_time, start_time + duration)
 
@@ -568,7 +571,7 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
             start_idx, end_idx, chunk_annotations[label_scope_key]
         ):
             mapped_label = mapping[label]
-            y[start:end + 1, mapped_label] = 1
+            y[start : end + 1, mapped_label] = 1
 
         sample["y"] = SlidingWindowFeature(y, self.model.receptive_field, labels=labels)
 
@@ -631,7 +634,9 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
 
         return (file_id, start_time)
 
-    def draw_embedding_chunk(self, database: str, class_idx: int, duration: float) -> tuple:
+    def draw_embedding_chunk(
+        self, database: str, class_idx: int, duration: float
+    ) -> tuple:
         """Sample one chunk for the embedding task
 
         Parameters
@@ -657,13 +662,20 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         database_files_id = np.argwhere(
             self.prepared_data["audio-metadata"][:]["database"] == database_idx
         ).flatten()
-        database_mask = np.isin(self.prepared_data["annotations-segments"]["file_id"], database_files_id)
+        database_mask = np.isin(
+            self.prepared_data["annotations-segments"]["file_id"], database_files_id
+        )
 
         # get all segments for the current classes
-        class_mask = self.prepared_data["annotations-segments"]["database_label_idx"] == class_idx
+        class_mask = (
+            self.prepared_data["annotations-segments"]["database_label_idx"]
+            == class_idx
+        )
 
         # get segments for current class = segments which belong to current database and class
-        class_segments = self.prepared_data["annotations-segments"][np.logical_and(database_mask, class_mask)]
+        class_segments = self.prepared_data["annotations-segments"][
+            np.logical_and(database_mask, class_mask)
+        ]
 
         # sample one segment from all the class segments:
         segments_duration = class_segments["end"] - class_segments["start"]
@@ -726,7 +738,10 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         )
 
         sample_idx = 0
-        database = rng.choice(self.prepared_data["metadata-values"]["database"])
+
+        databases = list(classes.keys())
+        weights = [len(classes[database]) for database in classes]
+        database = rng.choices(databases, weights=weights)[0]
         database_classes_idx = {database: 0 for database in classes}
         while True:
             if sample_idx < self.num_dia_samples:
@@ -743,13 +758,15 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
                 klass = classes[database][database_classes_idx[database]]
                 database_classes_idx[database] += 1
 
-                file_id, start_time = self.draw_embedding_chunk(database, klass, duration)
+                file_id, start_time = self.draw_embedding_chunk(
+                    database, klass, duration
+                )
 
             sample = self.prepare_chunk(file_id, start_time, duration)
 
             sample_idx = (sample_idx + 1) % batch_size
             if sample_idx == 0:
-                rng.choice(self.prepared_data["metadata-values"]["database"])
+                database = rng.choices(databases, weights=weights)[0]
 
             yield sample
 
@@ -848,7 +865,6 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
 
             collated_y_dia.append(y_dia)
             collate_y_emb.append(y_emb)
-
         return (
             torch.from_numpy(np.stack(collated_y_dia)),
             torch.from_numpy(np.stack(collate_y_emb)).squeeze(1),
@@ -902,14 +918,15 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         # define a loss for each database-scope dataset
         arcface_losses = []
         for database in classes:
-            arcface_losses.append((
-                database,
-                ArcFaceLoss(
+            arcface_losses.append(
+                (
+                    database,
+                    ArcFaceLoss(
                         len(classes[database]),
                         self.model.hparams["embedding_dim"],
                         margin=self.margin,
                         scale=self.scale,
-                    )
+                    ),
                 )
             )
         self.model.arc_face_loss = nn.ModuleDict(
@@ -983,7 +1000,9 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         )
         return dia_loss
 
-    def compute_embedding_loss(self, emb_prediction, target_emb, valid_embs, database: str):
+    def compute_embedding_loss(
+        self, emb_prediction, target_emb, valid_embs, database: str
+    ):
         """Compute loss for the speaker embeddings extraction subtask
 
         Parameters
@@ -1008,11 +1027,11 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         valid_embs = rearrange(valid_embs, "b s -> (b s)")
         # compute the loss
         emb_loss = self.model.arc_face_loss[database](
-            embeddings[valid_embs, :], targets[valid_embs]
+            embeddings[targets != -1], targets[targets != -1]
         )
 
         if torch.any(valid_embs):
-            emb_loss = (1. / torch.sum(valid_embs)) * emb_loss
+            emb_loss = (1.0 / torch.sum(valid_embs)) * emb_loss
 
         # skip batch if something went wrong for some reason
         if torch.isnan(emb_loss):
