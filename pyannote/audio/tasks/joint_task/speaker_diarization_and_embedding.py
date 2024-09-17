@@ -459,7 +459,8 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
             database_mask = np.isin(
                 self.prepared_data["annotations-segments"]["file_id"], database_files_id
             )
-            classes[database] = np.unique(self.prepared_data["annotations-segments"][database_mask]["database_label_idx"])
+            max_idx = max(self.prepared_data["annotations-segments"][database_mask]["database_label_idx"])
+            classes[database] = np.arange(max_idx + 1)
 
         # if there is no file dedicated to the embedding task
         if self.alpha != 1.0 and len(classes) == 0:
@@ -644,7 +645,7 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         return (file_id, start_time)
 
     def draw_embedding_chunk(
-        self, database: str, class_idx: int, rng: random.Random, duration: float,
+        self, file_ids: np.ndarray, database: str, class_idx: int, rng: random.Random, duration: float,
     ) -> tuple:
         """Sample one chunk for the embedding task
 
@@ -673,6 +674,7 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
         database_files_id = np.argwhere(
             self.prepared_data["audio-metadata"]["database"] == database_idx
         ).flatten()
+        database_files_id = database_files_id[np.isin(database_files_id, file_ids)]
         database_mask = np.isin(
             self.prepared_data["annotations-segments"]["file_id"], database_files_id
         )
@@ -773,7 +775,7 @@ class JointSpeakerDiarizationAndEmbedding(SpeakerDiarization):
                 database_idxs[database] += 1
 
                 file_id, start_time = self.draw_embedding_chunk(
-                    database, class_idx, rng, duration
+                    file_ids, database, class_idx, rng, duration
                 )
 
             sample = self.prepare_chunk(file_id, start_time, duration)
