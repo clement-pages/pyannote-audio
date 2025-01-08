@@ -73,9 +73,9 @@ class PyanNet(Model):
 
     def __init__(
         self,
-        sincnet: Optional[dict] = None,
-        lstm: Optional[dict] = None,
-        linear: Optional[dict] = None,
+        sincnet: dict = None,
+        lstm: dict = None,
+        linear: dict = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
         task: Optional[Task] = None,
@@ -89,13 +89,16 @@ class PyanNet(Model):
         linear = merge_dict(self.LINEAR_DEFAULTS, linear)
         self.save_hyperparameters("sincnet", "lstm", "linear")
 
-        self.sincnet = SincNet(**self.hparams.sincnet)
+        self.sincnet0 = SincNet(**self.hparams.sincnet)
+        self.sincnet1 = SincNet(**self.hparams.sincnet)
+        self.sincnet2 = SincNet(**self.hparams.sincnet)
+        self.sincnet3 = SincNet(**self.hparams.sincnet)
 
         monolithic = lstm["monolithic"]
         if monolithic:
             multi_layer_lstm = dict(lstm)
             del multi_layer_lstm["monolithic"]
-            self.lstm = nn.LSTM(60, **multi_layer_lstm)
+            self.lstm = nn.LSTM(60*num_channels, **multi_layer_lstm)
 
         else:
             num_layers = lstm["num_layers"]
@@ -219,15 +222,18 @@ class PyanNet(Model):
         -------
         scores : (batch, frame, classes)
         """
-
-        outputs = self.sincnet(waveforms)
-
+        print("taille waveforms (pour info : (batch, channel, sample)) = ",waveforms.shape)
+        outputs0 = self.sincnet0(waveforms[:,0:1,:])
+        outputs1 = self.sincnet1(waveforms[:,1:2,:])
+        outputs2 = self.sincnet2(waveforms[:,2:3,:])
+        outputs3 = self.sincnet3(waveforms[:,3:4,:])
+        outputs=torch.cat((outputs0, outputs1, outputs2, outputs3), 1)
+        outputs = rearrange(outputs, "batch feature frame -> batch frame feature")
+        
         if self.hparams.lstm["monolithic"]:
-            outputs, _ = self.lstm(
-                rearrange(outputs, "batch feature frame -> batch frame feature")
-            )
+            #print("Tenseur a l'entrée = ",t.shape)
+            outputs, _ = self.lstm(outputs)
         else:
-            outputs = rearrange(outputs, "batch feature frame -> batch frame feature")
             for i, lstm in enumerate(self.lstm):
                 outputs, _ = lstm(outputs)
                 if i + 1 < self.hparams.lstm["num_layers"]:

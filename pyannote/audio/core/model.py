@@ -93,14 +93,15 @@ class Model(pl.LightningModule):
     ):
         super().__init__()
 
-        assert (
-            num_channels == 1
-        ), "Only mono audio is supported for now (num_channels = 1)"
+        #assert (
+        #    num_channels == 1
+        #), "Only mono audio is supported for now (num_channels = 1)"
 
         self.save_hyperparameters("sample_rate", "num_channels")
 
         self.task = task
-        self.audio = Audio(sample_rate=self.hparams.sample_rate, mono="downmix")
+        self.audio = Audio(sample_rate=self.hparams.sample_rate) # JF, mono="downmix")
+        print(self.audio)
 
     @property
     def task(self) -> Task:

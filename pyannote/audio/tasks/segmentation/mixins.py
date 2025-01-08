@@ -240,17 +240,19 @@ class SegmentationTask(Task):
         collated_meta = self.collate_meta(batch)
 
         # apply augmentation (only in "train" stage)
-        self.augmentation.train(mode=(stage == "train"))
-        augmented = self.augmentation(
-            samples=collated_X,
-            sample_rate=self.model.hparams.sample_rate,
-            targets=collated_y.unsqueeze(1),
-        )
+        #self.augmentation.train(mode=(stage == "train"))
+        #augmented = self.augmentation(
+        #    samples=collated_X,
+        #    sample_rate=self.model.hparams.sample_rate,
+        #    targets=collated_y.unsqueeze(1),
+        #)
 
         return {
-            "X": augmented.samples,
-            "y": augmented.targets.squeeze(1),
-            "meta": collated_meta,
+            #"X": augmented.samples,
+            #"y": augmented.targets.squeeze(1),
+            "X": collated_X,
+            "y": collated_y,
+            "meta": collated_meta     
         }
 
     def train__len__(self):
