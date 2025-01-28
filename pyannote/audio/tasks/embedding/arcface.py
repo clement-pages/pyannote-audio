@@ -67,6 +67,10 @@ class SupervisedRepresentationLearningWithArcFace(
         If True, data loaders will copy tensors into CUDA pinned
         memory before returning them. See pytorch documentation
         for more details. Defaults to False.
+    deterministic : bool, optional
+        Ensure training reproductibility when set to True. Might slow down the system.
+        To ensure full reproductibility, set a seed for pseudo-random generators.
+        Defaults to False.
     augmentation : BaseWaveformTransform, optional
         torch_audiomentations waveform transform, used by dataloader
         during training.
@@ -90,6 +94,7 @@ class SupervisedRepresentationLearningWithArcFace(
         scale: float = 64.0,
         num_workers: Optional[int] = None,
         pin_memory: bool = False,
+        deterministic: bool = False,
         augmentation: Optional[BaseWaveformTransform] = None,
         metric: Union[Metric, Sequence[Metric], Dict[str, Metric]] = None,
     ):
@@ -107,6 +112,7 @@ class SupervisedRepresentationLearningWithArcFace(
             batch_size=self.batch_size,
             num_workers=num_workers,
             pin_memory=pin_memory,
+            deterministic=deterministic,
             augmentation=augmentation,
             metric=metric,
         )
