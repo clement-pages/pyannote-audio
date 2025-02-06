@@ -131,6 +131,8 @@ class MultiLabelSegmentation(SegmentationTask):
         self.weight = weight
         self.classes = classes
 
+        self.save_hyperparameters(ignore=["augmentation", "metric", "protocol"])
+
         # task specification depends on the data: we do not know in advance which
         # classes should be detected. therefore, we postpone the definition of
         # specifications to setup()

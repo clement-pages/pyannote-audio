@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import inspect
 import itertools
 import multiprocessing
 import sys
@@ -333,6 +334,7 @@ class Task(pl.LightningDataModule):
             'metadata-values': dict of lists of values for subset, scope and database
             'metadata-`database-name`-labels': array of `database-name` labels. Each database with "database" scope labels has it own array.
             'metadata-labels': array of global scope labels
+            'task-parameters': hyper-parameters used for the task
         }
 
         """
@@ -601,6 +603,20 @@ class Task(pl.LightningDataModule):
         prepared_data["metadata-labels"] = np.array(unique_labels, dtype=np.str_)
         unique_labels.clear()
 
+        # keep track of task hyperparameters
+        parameters = []
+        dtype = []
+        for param_name, param_value in self.hparams.items():
+            if isinstance(param_value, (bool, float, int, str, type(None))):
+                parameters.append(param_value)
+                dtype.append((param_name, type(param_value)))
+
+        prepared_data["task-parameters"] = np.array(
+            tuple(parameters), dtype=np.dtype(dtype)
+        )
+        parameters.clear()
+        dtype.clear()
+
         if self.has_validation:
             self.prepare_validation(prepared_data)
 
@@ -653,6 +669,18 @@ class Task(pl.LightningDataModule):
                 f"Protocol specified for the task ({self.protocol.name}) "
                 f"does not correspond to the cached one ({self.prepared_data['protocol']})"
             )
+
+        # checks that the task current hyperparameters matches the cached ones
+        for param_name, param_value in self.hparams.items():
+            if param_name not in self.prepared_data["task-parameters"].dtype.names:
+                continue
+            cached_value = self.prepared_data["task-parameters"][param_name]
+            if param_value != cached_value:
+                warnings.warn(
+                    f"Value specified for the task hyperparameter {param_name} differs from the one in the cached data."
+                    f"Current value = {param_value}, cached value = {cached_value}."
+                    "You may need to create a new cache with the new value for this hyperparameter.",
+                )
 
     @property
     def automatic_optimization(self) -> bool:
@@ -886,3 +914,46 @@ class Task(pl.LightningDataModule):
 
         name, metric = next(iter(self.metric.items()))
         return name, "max" if metric.higher_is_better else "min"
+
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint["pyannote.audio"]["task"] = {
+            "module": self.__class__.__module__,
+            "class": self.__class__.__name__,
+            "hyper_parameters": self.hparams,
+        }
+
+        # save augmentation:
+        # TODO: add support for compose augmentation
+        if not self.augmentation:
+            checkpoint["pyannote.audio"]["task"]["augmentation"] = None
+        elif isinstance(self.augmentation, BaseWaveformTransform):
+            checkpoint["pyannote.audio"]["task"]["augmentation"] = [{
+                "module": self.augmentation.__class__.__module__,
+                "class": self.augmentation.__class__.__name__,
+                "kwargs": {
+                    param: getattr(self.augmentation, param, None)
+                    for param in inspect.signature(self.augmentation.__init__).parameters
+                }
+            }]
+
+        # save metrics:
+        if isinstance(self.metric, Metric):
+            metrics = {self.metric.__class__.__name__: self.metric}
+        elif isinstance(self.metric, Sequence):
+            metrics = {metric.__class__.__name__: metric for metric in self.metric}
+        else:
+            metrics = self.metric
+        
+        if metrics:
+            checkpoint["pyannote.audio"]["task"]["metrics"] = {
+                name: {
+                    "module": metric.__class__.__module__,
+                    "class": metric.__class__.__name__,
+                    "kwargs": {
+                        param : getattr(metric, param, None)
+                        for param in inspect.signature(metric.__init__).parameters
+                    }
+                } for name, metric in metrics.items()
+            }
+        else:
+            checkpoint["pyannote.audio"]["task"]["metrics"] = None
