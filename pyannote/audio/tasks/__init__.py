@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 from .segmentation.multilabel import MultiLabelSegmentation  # isort:skip
+from .segmentation.phlesnid_multilabel import PhlesnidMultiLabelSegmentation
 from .segmentation.speaker_diarization import SpeakerDiarization  # isort:skip
 from .separation.PixIT import PixIT  # isort:skip
 from .segmentation.voice_activity_detection import VoiceActivityDetection  # isort:skip
@@ -40,6 +41,7 @@ __all__ = [
     "VoiceActivityDetection",
     "OverlappedSpeechDetection",
     "MultiLabelSegmentation",
+    "PhlesnidMultilabelSegmentation",
     "SpeakerEmbedding",
     "Segmentation",
     "PixIT",
