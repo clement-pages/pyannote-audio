@@ -38,6 +38,7 @@ from lightning_fabric.utilities.cloud_io import _load as pl_load
 from pyannote.core import SlidingWindow
 from pytorch_lightning.utilities.model_summary.model_summary import ModelSummary
 from torch.utils.data import DataLoader
+from torch_audiomentations.core.composition import Compose
 
 from pyannote.audio import __version__
 from pyannote.audio.core.io import Audio
@@ -52,11 +53,6 @@ from pyannote.audio.utils.multi_task import map_with_specifications
 from pyannote.audio.utils.version import check_version
 
 from pyannote.database import Protocol
-
-CACHE_DIR = os.getenv(
-    "PYANNOTE_CACHE",
-    os.path.expanduser("~/.cache/torch/pyannote"),
-)
 
 
 # NOTE: needed to backward compatibility to load models trained before pyannote.audio 3.x
@@ -534,7 +530,7 @@ class Model(pl.LightningModule):
         strict: bool = True,
         subfolder: Optional[str] = None,
         token: Union[str, bool, None] = None,
-        cache_dir: Union[Path, Text] = CACHE_DIR,
+        cache_dir: Union[Path, str, None] = None,
         protocol: Union[Protocol, None] = None,
         **kwargs,
     ) -> Optional["Model"]:
@@ -558,8 +554,7 @@ class Model(pl.LightningModule):
         token : str or bool, optional
             Token to be used for the download.
         cache_dir: Path or str, optional
-            Path to model cache directory. Defaults to content of PYANNOTE_CACHE
-            environment variable, or "~/.cache/torch/pyannote" when unset.
+            Path to the folder where cached files are stored.
         protocol: Protocol, optional
             Protocol used to train the model. Needed to continue training.
         kwargs: optional
@@ -650,28 +645,39 @@ class Model(pl.LightningModule):
 
             TaskClass = getattr(task_module, task_class_name)
 
-            # instanciate task augmentation
-            augmentation = loaded_checkpoint["pyannote.audio"]["task"]["augmentation"]
-            if augmentation:
-                augmentation_module = import_module(augmentation["module"])
-                augmentation_class = augmentation["class"]
-                augmentation_kwargs = augmentation["kwargs"]
-                AugmentationClass = getattr(augmentation_module, augmentation_class)
-                augmentation = AugmentationClass(**augmentation_kwargs)
+            # instantiate task augmentation
+            def instantiate_transform(transform_data):
+                transform_module = import_module(transform_data["module"])
+                transform_class = transform_data["class"]
+                transform_kwargs = transform_data["kwargs"]
+                TransformClass = getattr(transform_module, transform_class)
+                return TransformClass(**transform_kwargs)
 
-            task_hparams["augmentation"] = augmentation
+            augmentation_data = loaded_checkpoint["pyannote.audio"]["task"]["augmentation"]
+            # BaseWaveformTransform case
+            if isinstance(augmentation_data, Dict):
+                task_hparams["augmentation"] = instantiate_transform(augmentation_data)
+
+            # Compose transform case
+            elif isinstance(augmentation_data , List):
+                transforms = []
+                for transform_data in augmentation_data:
+                    transform = instantiate_transform(transform_data)
+                    transforms.append(transform)
+                
+                task_hparams["augmentation"] = Compose(transforms=transforms, output_type="dict")
 
             # instanciate task metrics
             metrics = loaded_checkpoint["pyannote.audio"]["task"]["metrics"]
             if metrics:
                 metric = {}
-                for name, metadata in metrics.items():
+                for metadata in metrics:
                     metric_module = import_module(metadata["module"])
                     metric_class = metadata["class"]
                     metric_kwargs = metadata["kwargs"]
 
                     MetricClass = getattr(metric_module, metric_class)
-                    metric[name] = MetricClass(**metric_kwargs)
+                    metric[metric_class] = MetricClass(**metric_kwargs)
             else:
                 metric = None
 
