@@ -248,6 +248,9 @@ class Model(pl.LightningModule):
     def on_save_checkpoint(self, checkpoint):
         # put everything pyannote.audio-specific under pyannote.audio
         # to avoid any future conflicts with pytorch-lightning updates
+
+        # print(f"epoch = {checkpoint['epoch']}, metrics = {self.trainer.callback_metrics}")
+
         checkpoint["pyannote.audio"] = {
             "versions": {
                 "torch": torch.__version__,
