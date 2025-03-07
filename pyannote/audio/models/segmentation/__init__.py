@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from .PyanNet import PyanNet, PyanNetOld, PyanNetMultiSincNet
+from .PyanNet import PyanNet, PyanNetOld, PyanNetMultiSincNet, PyanNetLateFusion
 from .SSeRiouSS import SSeRiouSS
 
-__all__ = ["PyanNet", "PyanNetOld", "SSeRiouSS", "PyanNetMultiSincNet"]
+__all__ = ["PyanNet", "PyanNetOld", "SSeRiouSS", "PyanNetMultiSincNet", "PyanNetLateFusion"]
