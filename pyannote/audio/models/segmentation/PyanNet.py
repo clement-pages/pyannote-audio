@@ -96,33 +96,35 @@ class PyanNet(Model):
         self.sincnet = SincNet(**self.hparams.sincnet)
 
         monolithic = lstm["monolithic"]
-        if monolithic:
-            multi_layer_lstm = dict(lstm)
-            del multi_layer_lstm["monolithic"]
-            # self.lstm = nn.LSTM(60*num_channels, **multi_layer_lstm)
-            self.lstm = nn.LSTM(len(sincnet["channel_groups"]) * 60, **multi_layer_lstm)
+        self.lstm = nn.ModuleList()
+        for i in range(len(sincnet["channel_groups"])):
+            if monolithic:
+                multi_layer_lstm = dict(lstm)
+                del multi_layer_lstm["monolithic"]
+                # self.lstm = nn.LSTM(60*num_channels, **multi_layer_lstm)
+                self.lstm.append(nn.LSTM(60, **multi_layer_lstm))
 
-        else:
-            num_layers = lstm["num_layers"]
-            if num_layers > 1:
-                self.dropout = nn.Dropout(p=lstm["dropout"])
+            else:
+                num_layers = lstm["num_layers"]
+                if num_layers > 1:
+                    self.dropout = nn.Dropout(p=lstm["dropout"])
 
-            one_layer_lstm = dict(lstm)
-            one_layer_lstm["num_layers"] = 1
-            one_layer_lstm["dropout"] = 0.0
-            del one_layer_lstm["monolithic"]
+                one_layer_lstm = dict(lstm)
+                one_layer_lstm["num_layers"] = 1
+                one_layer_lstm["dropout"] = 0.0
+                del one_layer_lstm["monolithic"]
 
-            self.lstm = nn.ModuleList(
-                [
-                    nn.LSTM(
-                        60
-                        if i == 0
-                        else lstm["hidden_size"] * (2 if lstm["bidirectional"] else 1),
-                        **one_layer_lstm
-                    )
-                    for i in range(num_layers)
-                ]
-            )
+                self.lstm.append(nn.ModuleList(
+                    [
+                        nn.LSTM(
+                            60
+                            if i == 0
+                            else lstm["hidden_size"] * (2 if lstm["bidirectional"] else 1),
+                            **one_layer_lstm
+                        )
+                        for i in range(num_layers)
+                    ]
+                ))
 
         if linear["num_layers"] < 1:
             return
@@ -135,7 +137,7 @@ class PyanNet(Model):
                 nn.Linear(in_features, out_features)
                 for in_features, out_features in pairwise(
                     [
-                        lstm_out_features,
+                        lstm_out_features * len(sincnet["channel_groups"]),
                     ]
                     + [self.hparams.linear["hidden_size"]]
                     * self.hparams.linear["num_layers"]
@@ -228,16 +230,21 @@ class PyanNet(Model):
         outputs = self.sincnet(waveforms)
         if len(outputs.shape) == 3:
             outputs = torch.unsqueeze(outputs, 2)
-        outputs = rearrange(outputs, "batch feature channel frame -> batch frame (feature channel)")
         
-        if self.hparams.lstm["monolithic"]:
-            #print("Tenseur a l'entrée = ",t.shape)
-            outputs, _ = self.lstm(outputs)
-        else:
-            for i, lstm in enumerate(self.lstm):
-                outputs, _ = lstm(outputs)
-                if i + 1 < self.hparams.lstm["num_layers"]:
-                    outputs = self.dropout(outputs)
+        lstm_outputs = []
+        for i, lstm in enumerate(self.lstm):
+            group_outputs = outputs[:, :, i, :]
+            group_outputs = rearrange(group_outputs, "batch feature frame -> batch frame feature")
+            if self.hparams.lstm["monolithic"]:
+                group_outputs, _ = lstm(group_outputs)
+            else:
+                for i, lstm_layer in enumerate(lstm):
+                    group_outputs, _ = lstm_layer(group_outputs)
+                    if i + 1 < self.hparams.lstm["num_layers"]:
+                        group_outputs = self.dropout(group_outputs)
+            lstm_outputs.append(group_outputs)
+        
+        outputs = torch.cat(lstm_outputs, dim=-1)
 
         if self.hparams.linear["num_layers"] > 0:
             for linear in self.linear:
