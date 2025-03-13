@@ -249,7 +249,7 @@ class Model(pl.LightningModule):
         # put everything pyannote.audio-specific under pyannote.audio
         # to avoid any future conflicts with pytorch-lightning updates
 
-        # print(f"epoch = {checkpoint['epoch']}, metrics = {self.trainer.callback_metrics}")
+        print(f"epoch = {checkpoint['epoch']}, metrics = {self.trainer.callback_metrics}")
 
         checkpoint["pyannote.audio"] = {
             "versions": {
