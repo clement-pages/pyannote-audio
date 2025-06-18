@@ -27,6 +27,7 @@
 import json
 import sys
 import time
+import types
 from contextlib import nullcontext
 from datetime import datetime
 from enum import Enum
@@ -34,16 +35,17 @@ from functools import partial
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pyannote.database
-from rich.progress import track
 import torch
 import typer
 import yaml
-from pyannote.audio import Audio, Pipeline
+from pyannote.audio import Audio, Pipeline, Model
 from pyannote.core import Annotation
 from pyannote.metrics.base import BaseMetric
-from pyannote.metrics.diarization import DiarizationErrorRate
+from pyannote.metrics.diarization import DiarizationErrorRate, JaccardErrorRate
 from pyannote.pipeline.optimizer import Optimizer
+from rich.progress import track
 from scipy.optimize import minimize_scalar
 from typing_extensions import Annotated
 
@@ -64,6 +66,20 @@ class Device(str, Enum):
 class NumSpeakers(str, Enum):
     ORACLE = "oracle"
     AUTO = "auto"
+
+
+class Metric(str, Enum):
+    DiarizationErrorRate = "DiarizationErrorRate"
+    JaccardErrorRate = "JaccardErrorRate"
+
+    @classmethod
+    def from_str(cls, metric: str):
+        """Convert a string to a Metric enum value."""
+
+        if metric == "DiarizationErrorRate":
+            return DiarizationErrorRate()
+        elif metric == "JaccardErrorRate":
+            return JaccardErrorRate()
 
 
 def parse_device(device: Device) -> torch.device:
@@ -139,6 +155,13 @@ def optimize(
     num_speakers: Annotated[
         NumSpeakers, typer.Option(help="Number of speakers (oracle or auto)")
     ] = NumSpeakers.AUTO,
+    metric: Annotated[
+        Metric,
+        typer.Option(
+            help="Metric to optimize against",
+            case_sensitive=False,
+        ),
+    ] = Metric.DiarizationErrorRate,
 ):
     """
     Optimize a PIPELINE
@@ -178,6 +201,12 @@ def optimize(
     files: list[pyannote.database.ProtocolFile] = list(
         getattr(loaded_protocol, subset.value)()
     )
+
+    # update `get_metric` method to return the requested metric instance
+    def _get_metric(self):
+        return Metric.from_str(metric)
+
+    optimized_pipeline.get_metric = types.MethodType(_get_metric, optimized_pipeline)
 
     # setting study name to this allows to store multiple optimizations
     # for the same pipeline in the same database
@@ -418,13 +447,21 @@ class MinDurationOffOptimizer:
         self._best_metric = float("inf")
         self._reports: dict[float, "DataFrame"] = dict()
 
+        # force test with no collar
+        no_collar_metric = self._compute_metric(files, metric, 0.)
+
         res = minimize_scalar(
             partial(self._compute_metric, files, metric),
             bounds=bounds,
             method="Bounded",
         )
 
-        best_min_duration_off = float(res.x)
+        # in case where better results are obtained without a collar
+        if no_collar_metric == self._best_metric:
+            best_min_duration_off = 0.
+
+        else:
+            best_min_duration_off = float(res.x)
 
         return best_min_duration_off, self._reports[best_min_duration_off]
 
@@ -562,6 +599,11 @@ def benchmark(
         # initialize diarization error rate metric
         metric = DiarizationErrorRate()
 
+    # speaker count confusion matrix
+    # speaker_count[i][j] is the number of files with i speakers in the
+    # manual annotation and j speakers in the prediction
+    speaker_count: dict[int, dict[int, int]] = dict()
+
     with open(into / f"{benchmark_name}.rttm", "w") as rttm:
         # iterate over all files in the specified subset
         for file in track(files, disable=not progress):
@@ -595,6 +637,14 @@ def benchmark(
                     speaker_diarization,
                     uem=file.get("annotated", None),
                 )
+
+            # increment speaker count confusion matrix
+            pred_num_speakers: int = len(speaker_diarization.labels())
+            true_num_speakers: int = len(file["annotation"].labels())
+            speaker_count.setdefault(true_num_speakers, dict()).setdefault(
+                pred_num_speakers, 0
+            )
+            speaker_count[true_num_speakers][pred_num_speakers] += 1
 
             # keep track of prediction for later "min_duration_off" optimization
             if optimize:
@@ -647,6 +697,43 @@ def benchmark(
     with open(into / f"{benchmark_name}.txt", "w") as txt:
         txt.write(str(metric))
 
+
+    # turn speaker count confusion matrix into numpy array
+    # and save it to disk as a CSV file
+    max_true_speakers = max(speaker_count.keys())
+    max_pred_speakers = max(
+        max(speaker_count[true_speakers].keys())
+        for true_speakers in speaker_count.keys()
+    )
+    speaker_count_matrix = np.zeros(
+        (max_true_speakers + 1, max_pred_speakers + 1), dtype=int
+    )
+    for true_speakers, pred_counts in speaker_count.items():
+        for pred_speakers, count in pred_counts.items():
+            speaker_count_matrix[true_speakers, pred_speakers] = count
+
+    # compute the average error in the speaker count prediction
+    speaker_count_error: float = np.sum(
+        [
+            abs(true_speakers - pred_speakers) * count
+            for true_speakers, pred_counts in speaker_count.items()
+            for pred_speakers, count in pred_counts.items()
+        ]
+    ) / np.sum(speaker_count_matrix)
+
+    # compute the accuracy of the speaker count prediction
+    speaker_count_accuracy: float = np.sum(
+        np.diag(speaker_count_matrix)
+    ) / np.sum(speaker_count_matrix)
+
+    np.savetxt(
+        into / f"{benchmark_name}.SpeakerCount.csv",
+        speaker_count_matrix,
+        delimiter=",",
+        fmt="%3d",
+        footer=f"Accuracy = {speaker_count_accuracy:.1%} / Average error = {speaker_count_error:.2f} speakers off",
+    )
+
     # report metric results with an optimized min_duration_off
     if optimize:
         minDurationOffOptimizer = MinDurationOffOptimizer()
@@ -656,7 +743,11 @@ def benchmark(
             best_report.to_csv(csv)
 
         with open(into / f"{benchmark_name}.OptimizedMinDurationOff.txt", "w") as txt:
-            txt.write(str(best_report))
+            txt.write(
+                best_report.to_string(
+                    sparsify=False, float_format=lambda f: "{0:.2f}".format(f)
+                )
+            )
 
         # keep track of the best `min_duration_off` value for later reference
         with open(into / f"{benchmark_name}.OptimizedMinDurationOff.yml", "w") as yml:
@@ -666,6 +757,59 @@ def benchmark(
         with open(into / f"{benchmark_name}.OptimizedMinDurationOff.rttm", "w") as rttm:
             for file in files:
                 file["best_speaker_diarization"].write_rttm(rttm)
+
+
+@app.command("strip")
+def strip(
+    checkpoint: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to pyannote.audio model checkpoint",
+            exists=True,
+            dir_okay=False,
+            file_okay=True,
+            resolve_path=True,
+        ),
+    ],
+    into: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to the stripped checkpoint",
+            exists=False,
+            dir_okay=False,
+            file_okay=True,
+            writable=True,
+            resolve_path=True,
+        ),
+    ],
+):
+    """
+    Strip a pretrained CHECKPOINT to only keep the parts needed for inference.
+    """
+
+    keys = [
+        "pytorch-lightning_version",   # * pytorch-lightning needs
+        "hparams_name",                #   those values to initialize 
+        "hyper_parameters",            #   the model architecture
+        "state_dict",                  # * actual weights
+        "pyannote.audio",              # * pyannote.audio dependencies 
+    ]
+
+    old_checkpoint = torch.load(
+        checkpoint, map_location=torch.device("cpu"), weights_only=False
+    )
+    new_checkpoint = {
+        key: value for key, value in old_checkpoint.items() if key in keys
+    }
+    torch.save(new_checkpoint, into)
+
+    # check that the stripped checkpoint can be loaded again
+    try:
+        _ = Model.from_pretrained(into)
+    except Exception as e:
+        sys.exit(
+            f"Something went wrong while stripping the checkpoint as it could not be reloaded: {e}"
+        )
 
 if __name__ == "__main__":
     app()
