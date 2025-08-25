@@ -1,8 +1,12 @@
 # CHANGELOG
 
-## develop
+## develop 
 
 ### TL;DR
+
+#### Better speaker assignment
+
+`pyannote/speaker-diarization-4.0` pretrained pipeline relies on VBx clustering instead of agglomerative hierarchical clustering (as suggested by [BUT Speech@FIT](https://speech.fit.vut.cz/) researchers [Petr Pálka](https://github.com/Selesnyan) and [Jiangyu Han](https://github.com/jyhan03)).
 
 #### Faster training
 
@@ -29,22 +33,30 @@ Models can now be stored alongside their pipelines in the same repository, strea
 - ~~accept `pyannote/wespeaker-voxceleb-resnet34-LM` model user agreement~~
 - load pipeline with `Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=True)`
 
+#### Telemetry
+
+With the optional telemetry feature in `pyannote.audio`, you can choose to send anonymous usage metrics to help the `pyannote` team improve the library.
 
 ### Breaking changes
 
+- BREAKING(io): remove support for `sox` and `soundfile` audio I/O backends (only `ffmpeg` or in-memory audio is supported)
 - BREAKING(setup): drop support to `Python` < 3.10
-- BREAKING(chore): switch to native namespace package
 - BREAKING(hub): rename `use_auth_token` to `token`
+- BREAKING(task): remove `OverlappedSpeechDetection` task (part of `SpeakerDiarization` task)
+- BREAKING(pipeline): remove `OverlappedSpeechDetection` and `Resegmentation` unmaintained pipelines (part of `SpeakerDiarization`)
 - BREAKING(cache): rely on `huggingface_hub` caching directory (`PYANNOTE_CACHE` is no longer used)
 - BREAKING(inference): `Inference` now only supports already instantiated models
 - BREAKING(task): drop support for `multilabel` training in `SpeakerDiarization` task
 - BREAKING(task): drop support for `warm_up` option in `SpeakerDiarization` task
 - BREAKING(task): drop support for `weigh_by_cardinality` option in `SpeakerDiarization` task
 - BREAKING(task): drop support for `vad_loss` option in `SpeakerDiarization` task
+- BREAKING(chore): switch to native namespace package
 - BREAKING(cli): remove deprecated `pyannote-audio-train` CLI
 
 ### New features
 
+- feat(io): switch from `torchaudio` to `torchcodec` for audio I/O
+- feat(pipeline): add support for VBx clustering ([@Selesnyan](https://github.com/Selesnyan) and [jyhan03](https://github.com/jyhan03))
 - feat(pyannoteAI): add wrapper around pyannoteAI SDK
 - improve(hub): add support for pipeline repos that also include underlying models
 - feat(clustering): add support for `k-means` clustering
