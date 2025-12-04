@@ -838,6 +838,7 @@ def benchmark(
         # get speaker diarization from raw prediction
         if is_sd_pipeline:
             speaker_diarization = get_diarization(prediction)
+            speaker_diarization.uri = uri
 
         # get transcriptions from raw prediction
         if is_transcription_pipeline:
