@@ -327,18 +327,19 @@ def apply(
     audio: Annotated[
         Path,
         typer.Argument(
-            help="Path to audio file",
+            help="Path to audio file or directory",
             exists=True,
             file_okay=True,
+            dir_okay=True,
             readable=True,
         ),
     ],
     into: Annotated[
         Path,
         typer.Option(
-            help="Path to file where results are saved.",
+            help="Path to file or directory where results are saved.",
             exists=False,
-            dir_okay=False,
+            dir_okay=True,
             file_okay=True,
             writable=True,
             resolve_path=True,
@@ -360,7 +361,7 @@ def apply(
     ] = None,
 ):
     """
-    Apply a pretrained PIPELINE to an AUDIO file
+    Apply a pretrained PIPELINE to an AUDIO file or directory
     """
 
     # load pretrained pipeline
@@ -373,14 +374,39 @@ def apply(
     torch_device = parse_device(device)
     pretrained_pipeline.to(torch_device)
 
-    # apply pipeline to audio file
-    prediction: Annotation = pretrained_pipeline(audio)
+    if audio.is_dir():
 
-    speaker_diarization = get_diarization(prediction)
+        if into is None or not into.is_dir():
+            typer.echo("When AUDIO is a directory, INTO must also be a directory.")
+            raise typer.exit(code=1)
 
-    # save (or print) results
-    with open(into, "w") if into else nullcontext(sys.stdout) as rttm:
-        speaker_diarization.write_rttm(rttm)
+        inputs: list[Path] = sorted(path for path in audio.iterdir() if path.is_file())
+        rttms: list[Path | None] = [into / (path.stem + ".rttm") for path in inputs]
+        jsons: list[Path | None] = [into / (path.stem + ".json") for path in inputs]
+
+    else:
+        
+        if not (into is None or into.is_file()):
+            typer.echo("When AUDIO is a file, INTO must also be a file.")
+            raise typer.exit(code=1)
+
+        inputs = [audio]
+        rttms: list[Path | None] = [into]
+        jsons: list[Path | None] = [into.with_suffix(".json") if into else None]
+
+    for current_input, current_rttm, current_json in zip(inputs, rttms, jsons):
+
+        prediction = pretrained_pipeline(current_input)
+
+        speaker_diarization = get_diarization(prediction)
+
+        with open(current_rttm, "w") if current_rttm else nullcontext(sys.stdout) as r:
+            speaker_diarization.write_rttm(r)
+
+        if hasattr(prediction, "serialize") and current_json:
+            serialized: dict = prediction.serialize()
+            with open(current_json, "w") as j:
+                json.dump(serialized, j, indent=2)
 
 
 class MinDurationOffOptimizer:
@@ -643,8 +669,9 @@ def benchmark(
             if per_file:
                 json_dir = benchmark_dir / "json"
                 json_dir.mkdir(exist_ok=True)
-
-                with open(json_dir / f"{uri}.json", "w") as f:
+                json_file = json_dir / f"{uri}.json"
+                json_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(json_file, "w") as f:
                     json.dump(prediction.serialize(), f, indent=2)
             else:
                 serialized_predictions[uri] = prediction.serialize()
@@ -655,6 +682,7 @@ def benchmark(
         # dump prediction to RTTM file
         if per_file:
             rttm_file = rttm_dir / f"{uri}.rttm"
+            rttm_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(rttm_file, "w" if per_file else "a") as rttm:
             speaker_diarization.write_rttm(rttm)
