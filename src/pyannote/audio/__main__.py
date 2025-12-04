@@ -677,6 +677,8 @@ def benchmark(
 
         # get speaker diarization from raw prediction
         speaker_diarization = get_diarization(prediction)
+        # override uri to make sure it is the same as the file uri
+        speaker_diarization.uri = uri
 
         # dump prediction to RTTM file
         if per_file:
