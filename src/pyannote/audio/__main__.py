@@ -669,8 +669,9 @@ def benchmark(
             if per_file:
                 json_dir = benchmark_dir / "json"
                 json_dir.mkdir(exist_ok=True)
-
-                with open(json_dir / f"{uri}.json", "w") as f:
+                json_file = json_dir / f"{uri}.json"
+                json_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(json_file, "w") as f:
                     json.dump(prediction.serialize(), f, indent=2)
             else:
                 serialized_predictions[uri] = prediction.serialize()
@@ -681,6 +682,7 @@ def benchmark(
         # dump prediction to RTTM file
         if per_file:
             rttm_file = rttm_dir / f"{uri}.rttm"
+            rttm_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(rttm_file, "w" if per_file else "a") as rttm:
             speaker_diarization.write_rttm(rttm)
