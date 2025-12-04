@@ -30,7 +30,7 @@ import time
 import types
 from contextlib import nullcontext
 from datetime import datetime
-from enum import Enum
+from enum import Enum, auto
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -40,14 +40,23 @@ import pyannote.database
 import torch
 import typer
 import yaml
-from pyannote.audio import Audio, Pipeline, Model
+from meeteval.io.seglst import SegLST, SegLstSegment
 from pyannote.core import Annotation
 from pyannote.metrics.base import BaseMetric
 from pyannote.metrics.diarization import DiarizationErrorRate, JaccardErrorRate
+from pyannote.metrics.transcription import (
+    WordErrorRate,
+    ConcatenatedMinimumPermutationWordErrorRate,
+    TimeConstrainedMinimumPermutationWordErrorRate,
+    TimeConstrainedOptimalReferenceCombinationWordErrorRate
+)
+from pyannote.metrics.normalizers import get_normalizer, Normalizer
 from pyannote.pipeline.optimizer import Optimizer
 from rich.progress import track
 from scipy.optimize import minimize_scalar
 from typing_extensions import Annotated
+
+from pyannote.audio import Audio, Model, Pipeline
 
 
 class Subset(str, Enum):
@@ -66,6 +75,11 @@ class Device(str, Enum):
 class NumSpeakers(str, Enum):
     ORACLE = "oracle"
     AUTO = "auto"
+
+
+class Granularity(str, Enum):
+    WORD = auto()
+    TURN = auto()
 
 
 class Metric(str, Enum):
@@ -106,6 +120,67 @@ def get_diarization(prediction) -> Annotation:
         return prediction.speaker_diarization
 
     raise ValueError("Could not find speaker diarization in prediction.")
+
+
+def get_transcription(prediction, granularity: Granularity, uri: str) -> SegLST | None:
+    level = (
+        "word_level_transcription"
+        if granularity == Granularity.WORD
+        else "turn_level_transcription"
+    )
+    transcription = getattr(prediction, level, None)
+
+    if not transcription:
+        return None
+
+    return SegLST(
+        segments=[
+            SegLstSegment(
+                session_id=uri,
+                start_time=entry["start"],
+                end_time=entry["end"],
+                words=entry["text"],
+                speaker=entry["speaker"],
+                segment_index=e,
+            )
+            for e, entry in enumerate(transcription)
+        ]
+    )
+
+
+def metric_to_csv(metric: BaseMetric, file_path: Path):
+    """Write metric report to CSV file"""
+    with open(file_path, "w") as csv:
+        metric.report().to_csv(csv)
+
+
+def metric_to_txt(metric: BaseMetric, file_path: Path):
+    """Write metric report to TXT file"""
+    with open(file_path, "w") as txt:
+        txt.write(str(metric))
+
+
+def write_stm(
+    transcription: SegLST,
+    file,
+):
+    """Write transcription to STM file
+
+    Parameters
+    ----------
+    transcription : SegLST
+        Speaker-attributed transcription
+    file : file-like
+        File-like object to write to
+    """
+
+    for seg in transcription:
+        session_id = seg["session_id"]
+        start = seg["start_time"]
+        end = seg["end_time"]
+        speaker = seg["speaker"]
+        words = seg["words"]
+        file.write(f"{session_id} NA {speaker} {start:.3f} {end:.3f} {words}\n")
 
 
 app = typer.Typer()
@@ -385,7 +460,7 @@ def apply(
         jsons: list[Path | None] = [into / (path.stem + ".json") for path in inputs]
 
     else:
-        
+
         if not (into is None or into.is_file()):
             typer.echo("When AUDIO is a file, INTO must also be a file.")
             raise typer.exit(code=1)
@@ -562,10 +637,7 @@ def benchmark(
         ),
     ] = False,
     per_file: Annotated[
-        bool,
-        typer.Option(
-            help="Save one RTTM/JSON file per processed audio file."
-        )
+        bool, typer.Option(help="Save one RTTM/JSON file per processed audio file.")
     ] = False,
 ):
     """
@@ -582,6 +654,12 @@ def benchmark(
     if pretrained_pipeline is None:
         print(f"Could not load pretrained pipeline from {pipeline}.")
         raise typer.exit(code=1)
+
+    tags = getattr(pretrained_pipeline, "tags", [])
+    # last case needed as pyannote.audio pipelines might not have any tags at all
+    is_sd_pipeline = "speaker_diarization" in tags or len(tags) == 0
+    is_streaming_sd_pipeline = "streaming_speaker_diarization" in tags
+    is_transcription_pipeline = "speaker_attributed_transcription" in tags
 
     # send pipeline to device
     torch_device = parse_device(device)
@@ -606,14 +684,27 @@ def benchmark(
     )
     files = list(getattr(loaded_protocol, subset.value)())
 
-    # check that manual annotation is available for all files
+    # check that manual speaker diarization annotation is available for all files
     # (condition to actually run the benchmark)
-    skip_metric = False
-    if any(file.get("annotation", None) is None for file in files):
+    skip_diarization_metric = not (is_sd_pipeline or is_streaming_sd_pipeline)
+    if not skip_diarization_metric and any(
+        file.get("annotation", None) is None for file in files
+    ):
         print(
-            f"Manual annotation is not available for files in {protocol} {subset.value} subset so skipping metric evaluation."
+            f"Manual annotation is not available for files in {protocol} {subset.value} subset so skipping diarization metric evaluation."
         )
-        skip_metric = True
+        skip_diarization_metric = True
+
+    # check that manual transcription annotation is available for all files
+    # (condition to actually run the benchmark)
+    skip_transcription_metric = not is_transcription_pipeline
+    if not skip_transcription_metric and any(
+        file.get("transcription", None) is None for file in files
+    ):
+        print(
+            f"Manual transcription is not available for files in {protocol} {subset.value} subset so skipping transcription metric evaluation."
+        )
+        skip_transcription_metric = True
 
     # `benchmark_name` is used as prefix to output files
     benchmark_name = f"{protocol}.{subset.value}"
@@ -627,9 +718,46 @@ def benchmark(
     # used to store raw predictions in JSON format
     serialized_predictions: dict[str, dict] = dict()
 
-    if not skip_metric:
+    if not skip_diarization_metric:
         # initialize diarization error rate metric
-        metric = DiarizationErrorRate()
+        der_metric = DiarizationErrorRate()
+
+    if not skip_transcription_metric:
+        # get normalizer for protocol language
+        dataset_language = files[0].get("language")
+        # only support single-language benchmarks
+        if not all(file.get("language") == dataset_language for file in files):
+            raise ValueError("Benchmarking multi-language protocols is not supported.")
+
+        normalizer = get_normalizer(files[0], Normalizer.FILE)
+
+        # initialize word-level transcription metrics
+        word_level_wer_metric = WordErrorRate(normalizer=normalizer)
+        word_level_cpwer_metric = ConcatenatedMinimumPermutationWordErrorRate(
+            normalizer=normalizer
+        )
+        word_level_tcpwer_metric = TimeConstrainedMinimumPermutationWordErrorRate(
+            normalizer=normalizer
+        )
+        word_level_tcorcwer_metric = (
+            TimeConstrainedOptimalReferenceCombinationWordErrorRate(
+                normalizer=normalizer
+            )
+        )
+
+        # initialize turn-level transcription metrics
+        turn_level_wer_metric = WordErrorRate(normalizer=normalizer)
+        turn_level_cpwer_metric = ConcatenatedMinimumPermutationWordErrorRate(
+            normalizer=normalizer
+        )
+        turn_level_tcpwer_metric = TimeConstrainedMinimumPermutationWordErrorRate(
+            normalizer=normalizer
+        )
+        turn_level_tcorcwer_metric = (
+            TimeConstrainedOptimalReferenceCombinationWordErrorRate(
+                normalizer=normalizer
+            )
+        )
 
     # speaker count confusion matrix
     # speaker_count[i][j] is the number of files with i speakers in the
@@ -641,14 +769,45 @@ def benchmark(
         if benchmark_dir.exists():
             raise FileExistsError(f"{benchmark_dir} already exists.")
 
-        rttm_dir = benchmark_dir / "rttm"
-        rttm_dir.mkdir(parents=True)
+        if is_sd_pipeline:
+            diarization_dir = benchmark_dir / "speaker_diarization"
+
+            rttm_dir = diarization_dir / "rttm"
+            rttm_dir.mkdir(parents=True)
+
+        if is_transcription_pipeline:
+            transcription_dir = benchmark_dir / "transcription"
+
+            stm_dir = transcription_dir / "stm"
+            stm_dir.mkdir(parents=True)
 
     else:
-        rttm_file = into / f"{benchmark_name}.rttm"
-        # make sure we don't overwrite previous results
-        if rttm_file.exists():
-            raise FileExistsError(f"{rttm_file} already exists.")
+        if is_sd_pipeline:
+            diarization_dir = into / "speaker_diarization"
+            diarization_dir.mkdir(parents=True)
+
+            rttm_file = diarization_dir / f"{benchmark_name}.rttm"
+            # make sure we don't overwrite previous results
+            if rttm_file.exists():
+                raise FileExistsError(f"{rttm_file} already exists.")
+
+        if is_transcription_pipeline:
+            transcription_dir = into / "transcription"
+            transcription_dir.mkdir(parents=True)
+
+            word_level_stm_file = (
+                transcription_dir / f"{benchmark_name}.WordLevelTranscription.stm"
+            )
+            # make sure we don't overwrite previous results
+            if word_level_stm_file.exists():
+                raise FileExistsError(f"{word_level_stm_file} already exists.")
+
+            turn_level_stm_file = (
+                transcription_dir / f"{benchmark_name}.TurnLevelTranscription.stm"
+            )
+            # make sure we don't overwrite previous results
+            if turn_level_stm_file.exists():
+                raise FileExistsError(f"{turn_level_stm_file} already exists.")
 
     # iterate over all files in the specified subset
     for file in track(files, disable=not progress):
@@ -677,23 +836,114 @@ def benchmark(
                 serialized_predictions[uri] = prediction.serialize()
 
         # get speaker diarization from raw prediction
-        speaker_diarization = get_diarization(prediction)
+        if is_sd_pipeline:
+            speaker_diarization = get_diarization(prediction)
 
-        # dump prediction to RTTM file
+        # get transcriptions from raw prediction
+        if is_transcription_pipeline:
+            word_level_transcription = get_transcription(
+                prediction, Granularity.WORD, uri
+            )
+            turn_level_transcription = get_transcription(
+                prediction, Granularity.TURN, uri
+            )
+
         if per_file:
-            rttm_file = rttm_dir / f"{uri}.rttm"
-            rttm_file.parent.mkdir(parents=True, exist_ok=True)
+            if is_sd_pipeline:
+                rttm_file = rttm_dir / f"{uri}.rttm"
+                rttm_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(rttm_file, "w" if per_file else "a") as rttm:
-            speaker_diarization.write_rttm(rttm)
+            if is_transcription_pipeline:
+                if word_level_transcription:
+                    word_level_stm_file = stm_dir / f"{uri}.WordLevelTranscription.stm"
+                    word_level_stm_file.parent.mkdir(parents=True, exist_ok=True)
+                if turn_level_transcription:
+                    turn_level_stm_file = stm_dir / f"{uri}.TurnLevelTranscription.stm"
+                    turn_level_stm_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # compute metric when possible
-        if not skip_metric:
-            _ = metric(
+        if is_sd_pipeline:
+            # dump prediction to RTTM file
+            with open(rttm_file, "w" if per_file else "a") as rttm:
+                speaker_diarization.write_rttm(rttm)
+
+        if is_transcription_pipeline:
+            if word_level_transcription:
+                # dump word-level transcription to STM file
+                with open(word_level_stm_file, "w" if per_file else "a") as stm:
+                    write_stm(
+                        word_level_transcription,
+                        stm,
+                    )
+
+            if turn_level_transcription:
+                # dump turn-level transcription to STM file
+                with open(turn_level_stm_file, "w" if per_file else "a") as stm:
+                    write_stm(
+                        turn_level_transcription,
+                        stm,
+                    )
+
+        # compute speaker diarization metrics when possible
+        if not skip_diarization_metric:
+            _ = der_metric(
                 file["annotation"],
                 speaker_diarization,
                 uem=file.get("annotated", None),
             )
+
+        # compute transcription metrics when possible
+        if not skip_transcription_metric:
+            if turn_level_transcription:
+                _ = turn_level_wer_metric(
+                    file["transcription"],
+                    turn_level_transcription,
+                    uri=uri,
+                )
+                _ = turn_level_cpwer_metric(
+                    file["transcription"],
+                    turn_level_transcription,
+                    uri=uri,
+                )
+                _ = turn_level_tcpwer_metric(
+                    file["transcription"],
+                    turn_level_transcription,
+                    uri=uri,
+                )
+                _ = turn_level_tcorcwer_metric(
+                    file["transcription"],
+                    turn_level_transcription,
+                    uri=uri,
+                )
+
+            if word_level_transcription:
+                _ = word_level_wer_metric(
+                    file["transcription"],
+                    word_level_transcription,
+                    uri=uri,
+                )
+
+                _ = word_level_cpwer_metric(
+                    file["transcription"],
+                    word_level_transcription,
+                    uri=uri,
+                )
+
+                _ = word_level_tcpwer_metric(
+                    file["transcription"],
+                    word_level_transcription,
+                    uri=uri,
+                )
+
+                _ = word_level_tcorcwer_metric(
+                    file["transcription"],
+                    word_level_transcription,
+                    uri=uri,
+                )
+
+        # if the pipeline is not a speaker diarization pipeline,
+        # nothing more to do
+        if not is_sd_pipeline:
+            continue
 
         # increment speaker count confusion matrix
         pred_num_speakers: int = len(speaker_diarization.labels())
@@ -743,16 +993,56 @@ def benchmark(
     with open(speed_yml, "w") as yml:
         yaml.dump(processing, yml)
 
-    # no need to go further than this point if evaluation is not possible
-    if skip_metric:
+    # no need to go further than this point if evaluation is not possible on any task
+    if skip_diarization_metric and skip_transcription_metric:
         raise typer.exit()
 
-    # save metric results in both CSV and human-readable formats
-    with open(into / f"{benchmark_name}.csv", "w") as csv:
-        metric.report().to_csv(csv)
+    # save diarization metrics results in both CSV and human-readable formats
+    if not skip_diarization_metric:
+        metric_to_csv(der_metric, diarization_dir / f"{benchmark_name}.DiarizationErrorRate.csv")
+        metric_to_txt(der_metric, diarization_dir / f"{benchmark_name}.DiarizationErrorRate.txt")
 
-    with open(into / f"{benchmark_name}.txt", "w") as txt:
-        txt.write(str(metric))
+    # save word level transcription metrics results in both CSV and human-readable formats
+    if not skip_transcription_metric and word_level_transcription:
+        level = "WordLevelTranscription"
+        # write WER
+        metric_to_csv(word_level_wer_metric, transcription_dir / f"{benchmark_name}.{level}.WordErrorRate.csv")
+        metric_to_txt(word_level_wer_metric, transcription_dir / f"{benchmark_name}.{level}.WordErrorRate.txt")
+
+        # write cpWER
+        metric_to_csv(word_level_cpwer_metric, transcription_dir / f"{benchmark_name}.{level}.CPWordErrorRate.csv")
+        metric_to_txt(word_level_cpwer_metric, transcription_dir / f"{benchmark_name}.{level}.CPWordErrorRate.txt")
+
+        # write tcpWER
+        metric_to_csv(word_level_tcpwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCPWordErrorRate.csv")
+        metric_to_txt(word_level_tcpwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCPWordErrorRate.txt")
+
+        # write tcorcWER
+        metric_to_csv(word_level_tcorcwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCORCWordErrorRate.csv")
+        metric_to_txt(word_level_tcorcwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCORCWordErrorRate.txt")
+
+    if not skip_transcription_metric and turn_level_transcription:
+        level = "TurnLevelTranscription"
+        # write WER
+        metric_to_csv(turn_level_wer_metric, transcription_dir / f"{benchmark_name}.{level}.WordErrorRate.csv")
+        metric_to_txt(turn_level_wer_metric, transcription_dir / f"{benchmark_name}.{level}.WordErrorRate.txt")
+
+        # write cpWER
+        metric_to_csv(turn_level_cpwer_metric, transcription_dir / f"{benchmark_name}.{level}.CPWordErrorRate.csv")
+        metric_to_txt(turn_level_cpwer_metric, transcription_dir / f"{benchmark_name}.{level}.CPWordErrorRate.txt")
+
+        # write tcpWER
+        metric_to_csv(turn_level_tcpwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCPWordErrorRate.csv")
+        metric_to_txt(turn_level_tcpwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCPWordErrorRate.txt")
+
+        # write tcorcWER
+        metric_to_csv(turn_level_tcorcwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCORCWordErrorRate.csv")
+        metric_to_txt(turn_level_tcorcwer_metric, transcription_dir / f"{benchmark_name}.{level}.TCORCWordErrorRate.txt")
+
+    # no need to go further than this point
+    # if pipeline is not a speaker diarization one
+    if not is_sd_pipeline:
+        raise typer.exit()
 
     # turn speaker count confusion matrix into numpy array
     # and save it to disk as a CSV file
@@ -783,7 +1073,7 @@ def benchmark(
     )
 
     np.savetxt(
-        into / f"{benchmark_name}.SpeakerCount.csv",
+        diarization_dir / f"{benchmark_name}.SpeakerCount.csv",
         speaker_count_matrix,
         delimiter=",",
         fmt="%3d",
@@ -791,14 +1081,14 @@ def benchmark(
     )
 
     # report metric results with an optimized min_duration_off
-    if optimize:
+    if optimize and not skip_diarization_metric:
         minDurationOffOptimizer = MinDurationOffOptimizer()
-        best_min_duration_off, best_report = minDurationOffOptimizer(files, metric)
+        best_min_duration_off, best_report = minDurationOffOptimizer(files, der_metric)
 
-        with open(into / f"{benchmark_name}.OptimizedMinDurationOff.csv", "w") as csv:
+        with open(diarization_dir / f"{benchmark_name}.OptimizedMinDurationOff.csv", "w") as csv:
             best_report.to_csv(csv)
 
-        with open(into / f"{benchmark_name}.OptimizedMinDurationOff.txt", "w") as txt:
+        with open(diarization_dir / f"{benchmark_name}.OptimizedMinDurationOff.txt", "w") as txt:
             txt.write(
                 best_report.to_string(
                     sparsify=False, float_format=lambda f: "{0:.2f}".format(f)
@@ -806,11 +1096,13 @@ def benchmark(
             )
 
         # keep track of the best `min_duration_off` value for later reference
-        with open(into / f"{benchmark_name}.OptimizedMinDurationOff.yml", "w") as yml:
+        with open(diarization_dir / f"{benchmark_name}.OptimizedMinDurationOff.yml", "w") as yml:
             yaml.dump({"min_duration_off": best_min_duration_off}, yml)
 
         if not per_file:
-            optimized_rttm_file = into / f"{benchmark_name}.OptimizedMinDurationOff.rttm"
+            optimized_rttm_file = (
+                diarization_dir / f"{benchmark_name}.OptimizedMinDurationOff.rttm"
+            )
 
             # make sure we don't overwrite previous results
             if optimized_rttm_file.exists():
@@ -818,7 +1110,9 @@ def benchmark(
 
         for file in files:
             if per_file:
-                optimized_rttm_file = rttm_dir / f"{file['uri']}.OptimizedMinDurationOff.rttm"
+                optimized_rttm_file = (
+                    rttm_dir / f"{file['uri']}.OptimizedMinDurationOff.rttm"
+                )
 
             with open(optimized_rttm_file, "w" if per_file else "a") as rttm:
                 file["best_speaker_diarization"].write_rttm(rttm)
@@ -853,11 +1147,11 @@ def strip(
     """
 
     keys = [
-        "pytorch-lightning_version",   # * pytorch-lightning needs
-        "hparams_name",                #   those values to initialize 
-        "hyper_parameters",            #   the model architecture
-        "state_dict",                  # * actual weights
-        "pyannote.audio",              # * pyannote.audio dependencies 
+        "pytorch-lightning_version",  # * pytorch-lightning needs
+        "hparams_name",  #   those values to initialize
+        "hyper_parameters",  #   the model architecture
+        "state_dict",  # * actual weights
+        "pyannote.audio",  # * pyannote.audio dependencies
     ]
 
     old_checkpoint = torch.load(
