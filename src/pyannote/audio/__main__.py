@@ -1150,6 +1150,7 @@ def benchmark(
     if not skip_transcription_metric and word_level_transcription:
         level = "WordLevelTranscription"
         word_level_dir = transcription_dir / level
+        word_level_dir.mkdir(parents=True, exist_ok=True)
         # write WER
         metric_to_csv(
             word_level_wer_metric,
@@ -1193,6 +1194,7 @@ def benchmark(
     if not skip_transcription_metric and turn_level_transcription:
         level = "TurnLevelTranscription"
         turn_level_dir = transcription_dir / level
+        turn_level_dir.mkdir(parents=True, exist_ok=True)
         # write WER
         metric_to_csv(
             turn_level_wer_metric,
