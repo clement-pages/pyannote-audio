@@ -977,10 +977,10 @@ def benchmark(
 
             if transcription:
                 if word_level_transcription:
-                    word_level_stm_file = stm_dir / "WordLevelTranscription" / f"{uri}.WordLevelTranscription.stm"
+                    word_level_stm_file = word_level_stm_dir / f"{uri}.WordLevelTranscription.stm"
                     word_level_stm_file.parent.mkdir(parents=True, exist_ok=True)
                 if turn_level_transcription:
-                    turn_level_stm_file = stm_dir / "TurnLevelTranscription" / f"{uri}.TurnLevelTranscription.stm"
+                    turn_level_stm_file = turn_level_stm_dir / f"{uri}.TurnLevelTranscription.stm"
                     turn_level_stm_file.parent.mkdir(parents=True, exist_ok=True)
 
         if diarization:
