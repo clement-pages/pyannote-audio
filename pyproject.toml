@@ -57,7 +57,7 @@ source = "vcs"
 packages = ["src/pyannote"]
 
 [tool.uv.sources]
-pyannote-metrics = { git = "https://github.com/clement-pages/pyannote-metrics.git", rev = "PYA-1148-add-transcription-metric" }
+pyannote-metrics = { git = "https://github.com/clement-pages/pyannote-metrics.git", rev = "f4a8db38c38357302c642c791ab568f077e7652a" }
 
 [dependency-groups]
 dev = ["ipykernel>=6.29.5"]
